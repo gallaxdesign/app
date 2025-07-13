@@ -121,6 +121,11 @@ async def update_service(service_id: str, service_data: ServiceUpdate, authentic
     update_data = {k: v for k, v in service_data.dict().items() if v is not None}
     update_data["updated_at"] = datetime.utcnow()
     
+    # Convert date objects to datetime for MongoDB
+    for key, value in update_data.items():
+        if isinstance(value, date) and not isinstance(value, datetime):
+            update_data[key] = datetime.combine(value, datetime.min.time())
+    
     result = await db.services.update_one(
         {"id": service_id, "is_deleted": False},
         {"$set": update_data}
