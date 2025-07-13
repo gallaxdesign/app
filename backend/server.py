@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,10 +7,10 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 import uuid
-from datetime import datetime
-
+from datetime import datetime, date
+import bcrypt
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -25,32 +26,144 @@ app = FastAPI()
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# Security
+security = HTTPBearer()
 
-# Define Models
-class StatusCheck(BaseModel):
+# Models
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+class Service(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    name: str
+    service_type: str  # Domain, Hosting, Domain+Hosting, Website, Consulting
+    provider: str
+    creation_date: date
+    last_renewal_date: Optional[date] = None
+    next_renewal_date: Optional[date] = None
+    annual_fee: float
+    currency: str = "TRY"
+    status: str = "active"  # active, inactive
+    notes: Optional[str] = None
+    is_deleted: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+class ServiceCreate(BaseModel):
+    name: str
+    service_type: str
+    provider: str
+    creation_date: date
+    last_renewal_date: Optional[date] = None
+    next_renewal_date: Optional[date] = None
+    annual_fee: float
+    currency: str = "TRY"
+    status: str = "active"
+    notes: Optional[str] = None
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
+class ServiceUpdate(BaseModel):
+    name: Optional[str] = None
+    service_type: Optional[str] = None
+    provider: Optional[str] = None
+    creation_date: Optional[date] = None
+    last_renewal_date: Optional[date] = None
+    next_renewal_date: Optional[date] = None
+    annual_fee: Optional[float] = None
+    currency: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.dict()
-    status_obj = StatusCheck(**status_dict)
-    _ = await db.status_checks.insert_one(status_obj.dict())
-    return status_obj
+# Authentication
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    # Simple token check - in production, use proper JWT
+    if credentials.credentials != "authenticated":
+        raise HTTPException(status_code=401, detail="Invalid authentication")
+    return True
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    status_checks = await db.status_checks.find().to_list(1000)
-    return [StatusCheck(**status_check) for status_check in status_checks]
+# Auth Routes
+@api_router.post("/auth/login")
+async def login(user_data: UserLogin):
+    # Hard-coded credentials as requested
+    if user_data.email == "bilgi@gallaxdesign.com" and user_data.password == "gallax11":
+        return {"token": "authenticated", "message": "Login successful"}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+# Service Routes
+@api_router.get("/services", response_model=List[Service])
+async def get_services(authenticated: bool = Depends(verify_token)):
+    services = await db.services.find({"is_deleted": False}).to_list(1000)
+    return [Service(**service) for service in services]
+
+@api_router.post("/services", response_model=Service)
+async def create_service(service_data: ServiceCreate, authenticated: bool = Depends(verify_token)):
+    service_dict = service_data.dict()
+    service_obj = Service(**service_dict)
+    await db.services.insert_one(service_obj.dict())
+    return service_obj
+
+@api_router.get("/services/{service_id}", response_model=Service)
+async def get_service(service_id: str, authenticated: bool = Depends(verify_token)):
+    service = await db.services.find_one({"id": service_id, "is_deleted": False})
+    if not service:
+        raise HTTPException(status_code=404, detail="Service not found")
+    return Service(**service)
+
+@api_router.put("/services/{service_id}", response_model=Service)
+async def update_service(service_id: str, service_data: ServiceUpdate, authenticated: bool = Depends(verify_token)):
+    update_data = {k: v for k, v in service_data.dict().items() if v is not None}
+    update_data["updated_at"] = datetime.utcnow()
+    
+    result = await db.services.update_one(
+        {"id": service_id, "is_deleted": False},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Service not found")
+    
+    updated_service = await db.services.find_one({"id": service_id})
+    return Service(**updated_service)
+
+@api_router.delete("/services/{service_id}")
+async def delete_service(service_id: str, authenticated: bool = Depends(verify_token)):
+    # Soft delete
+    result = await db.services.update_one(
+        {"id": service_id, "is_deleted": False},
+        {"$set": {"is_deleted": True, "updated_at": datetime.utcnow()}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Service not found")
+    
+    return {"message": "Service deleted successfully"}
+
+@api_router.get("/services/stats/dashboard")
+async def get_dashboard_stats(authenticated: bool = Depends(verify_token)):
+    total_services = await db.services.count_documents({"is_deleted": False})
+    active_services = await db.services.count_documents({"is_deleted": False, "status": "active"})
+    
+    # Calculate total annual fees
+    pipeline = [
+        {"$match": {"is_deleted": False, "status": "active"}},
+        {"$group": {"_id": None, "total_fees": {"$sum": "$annual_fee"}}}
+    ]
+    total_fees_result = await db.services.aggregate(pipeline).to_list(1)
+    total_annual_fees = total_fees_result[0]["total_fees"] if total_fees_result else 0
+    
+    # Services by type
+    type_pipeline = [
+        {"$match": {"is_deleted": False, "status": "active"}},
+        {"$group": {"_id": "$service_type", "count": {"$sum": 1}}}
+    ]
+    services_by_type = await db.services.aggregate(type_pipeline).to_list(10)
+    
+    return {
+        "total_services": total_services,
+        "active_services": active_services,
+        "total_annual_fees": total_annual_fees,
+        "services_by_type": services_by_type
+    }
 
 # Include the router in the main app
 app.include_router(api_router)
