@@ -99,7 +99,14 @@ async def get_services(authenticated: bool = Depends(verify_token)):
 async def create_service(service_data: ServiceCreate, authenticated: bool = Depends(verify_token)):
     service_dict = service_data.dict()
     service_obj = Service(**service_dict)
-    await db.services.insert_one(service_obj.dict())
+    
+    # Convert date objects to datetime for MongoDB
+    service_data_for_db = service_obj.dict()
+    for key, value in service_data_for_db.items():
+        if isinstance(value, date) and not isinstance(value, datetime):
+            service_data_for_db[key] = datetime.combine(value, datetime.min.time())
+    
+    await db.services.insert_one(service_data_for_db)
     return service_obj
 
 @api_router.get("/services/{service_id}", response_model=Service)
