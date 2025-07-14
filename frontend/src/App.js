@@ -216,11 +216,177 @@ const Dashboard = ({ stats }) => {
 };
 
 const ServiceList = ({ services, onEdit, onDelete }) => {
+  const { token } = useAuth();
+  
+  const axiosConfig = {
+    headers: { Authorization: `Bearer ${token}` }
+  };
+
+  const handleExcelExport = async () => {
+    try {
+      const response = await axios.get(`${API}/services/export/excel`, {
+        ...axiosConfig,
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'hizmetler.xlsx');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Excel export failed:', error);
+      alert('Excel export başarısız oldu');
+    }
+  };
+
+  const handlePDFExport = async () => {
+    try {
+      const response = await axios.get(`${API}/services/export/pdf`, {
+        ...axiosConfig,
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'hizmetler.pdf');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('PDF export failed:', error);
+      alert('PDF export başarısız oldu');
+    }
+  };
+
+  const handlePrint = () => {
+    const printWindow = window.open('', '_blank');
+    const printContent = `
+      <html>
+        <head>
+          <title>Hizmet Listesi</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { text-align: center; color: #333; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; font-weight: bold; }
+            tr:nth-child(even) { background-color: #f9f9f9; }
+            .status-active { color: #28a745; font-weight: bold; }
+            .status-inactive { color: #dc3545; font-weight: bold; }
+            @media print {
+              body { margin: 0; }
+              h1 { page-break-after: avoid; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Hizmet Listesi</h1>
+          <table>
+            <thead>
+              <tr>
+                <th>Hizmet Adı</th>
+                <th>Tür</th>
+                <th>Sağlayıcı</th>
+                <th>Yıllık Ücret</th>
+                <th>Sonraki Yenileme</th>
+                <th>Durum</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${services.map(service => `
+                <tr>
+                  <td>${service.name}</td>
+                  <td>${service.service_type}</td>
+                  <td>${service.provider}</td>
+                  <td>₺${service.annual_fee.toLocaleString()}</td>
+                  <td>${service.next_renewal_date ? new Date(service.next_renewal_date).toLocaleDateString('tr-TR') : '-'}</td>
+                  <td class="${service.status === 'active' ? 'status-active' : 'status-inactive'}">${service.status === 'active' ? 'Aktif' : 'Pasif'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          <script>
+            window.onload = function() {
+              window.print();
+              window.onafterprint = function() {
+                window.close();
+              };
+            };
+          </script>
+        </body>
+      </html>
+    `;
+    
+    printWindow.document.write(printContent);
+    printWindow.document.close();
+  };
+
+  const handleWhatsAppShare = async () => {
+    try {
+      // First generate PDF
+      const response = await axios.get(`${API}/services/export/pdf`, {
+        ...axiosConfig,
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'hizmetler.pdf');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      // Open WhatsApp with message
+      const message = "Hizmet listesi PDF dosyası paylaşılıyor.";
+      const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+      window.open(whatsappUrl, '_blank');
+    } catch (error) {
+      console.error('WhatsApp share failed:', error);
+      alert('WhatsApp paylaşım başarısız oldu');
+    }
+  };
+
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
         <h3 className="text-xl font-semibold">Hizmetler</h3>
-        <span className="text-gray-600">{services.length} hizmet</span>
+        <div className="flex items-center space-x-4">
+          <span className="text-gray-600">{services.length} hizmet</span>
+          <div className="flex space-x-2">
+            <button
+              onClick={handleExcelExport}
+              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"
+            >
+              📊 Excel
+            </button>
+            <button
+              onClick={handlePDFExport}
+              className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 text-sm"
+            >
+              📄 PDF
+            </button>
+            <button
+              onClick={handlePrint}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            >
+              🖨️ Yazdır
+            </button>
+            <button
+              onClick={handleWhatsAppShare}
+              className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-400 text-sm"
+            >
+              📱 WhatsApp
+            </button>
+          </div>
+        </div>
       </div>
       
       <div className="bg-white rounded-lg shadow-sm overflow-hidden">
