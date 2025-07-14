@@ -4,7 +4,7 @@ from datetime import datetime, date
 import json
 
 class ServiceTrackingAPITester:
-    def __init__(self, base_url="https://112979fc-79fe-4a17-a243-2a9c15e05fed.preview.emergentagent.com"):
+    def __init__(self, base_url="https://9506cb3a-692d-46e1-82a9-f50fec52d65c.preview.emergentagent.com"):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
         self.token = None
