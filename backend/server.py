@@ -185,6 +185,122 @@ async def get_dashboard_stats(authenticated: bool = Depends(verify_token)):
         "services_by_type": services_by_type
     }
 
+@api_router.get("/services/export/excel")
+async def export_services_excel(authenticated: bool = Depends(verify_token)):
+    """Export services to Excel file"""
+    try:
+        services = await db.services.find({"is_deleted": False}).to_list(1000)
+        
+        # Prepare data for Excel
+        excel_data = []
+        for service in services:
+            excel_data.append({
+                "Hizmet Adı": service.get("name", ""),
+                "Hizmet Türü": service.get("service_type", ""),
+                "Sağlayıcı": service.get("provider", ""),
+                "Yıllık Ücret": service.get("annual_fee", 0),
+                "Para Birimi": service.get("currency", "TRY"),
+                "Oluşturma Tarihi": service.get("creation_date", "").strftime("%d.%m.%Y") if service.get("creation_date") else "",
+                "Son Yenileme": service.get("last_renewal_date", "").strftime("%d.%m.%Y") if service.get("last_renewal_date") else "",
+                "Sonraki Yenileme": service.get("next_renewal_date", "").strftime("%d.%m.%Y") if service.get("next_renewal_date") else "",
+                "Durum": "Aktif" if service.get("status") == "active" else "Pasif",
+                "Notlar": service.get("notes", "")
+            })
+        
+        # Create Excel file
+        df = pd.DataFrame(excel_data)
+        
+        # Create Excel file in memory
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Hizmetler', index=False)
+        
+        excel_buffer.seek(0)
+        
+        # Return as streaming response
+        return StreamingResponse(
+            io.BytesIO(excel_buffer.read()),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=hizmetler.xlsx"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Excel export failed: {str(e)}")
+
+@api_router.get("/services/export/pdf")
+async def export_services_pdf(authenticated: bool = Depends(verify_token)):
+    """Export services to PDF file"""
+    try:
+        services = await db.services.find({"is_deleted": False}).to_list(1000)
+        
+        # Create PDF file in memory
+        pdf_buffer = io.BytesIO()
+        doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
+        
+        # Create styles
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'TitleStyle',
+            parent=styles['Heading1'],
+            alignment=1,  # Center alignment
+            fontSize=18,
+            spaceAfter=30,
+        )
+        
+        # Create elements
+        elements = []
+        
+        # Title
+        title = Paragraph("Hizmet Listesi", title_style)
+        elements.append(title)
+        elements.append(Spacer(1, 20))
+        
+        # Prepare table data
+        table_data = [
+            ["Hizmet", "Tür", "Sağlayıcı", "Yıllık Ücret", "Sonraki Yenileme", "Durum"]
+        ]
+        
+        for service in services:
+            table_data.append([
+                service.get("name", ""),
+                service.get("service_type", ""),
+                service.get("provider", ""),
+                f"₺{service.get('annual_fee', 0):,.0f}",
+                service.get("next_renewal_date", "").strftime("%d.%m.%Y") if service.get("next_renewal_date") else "-",
+                "Aktif" if service.get("status") == "active" else "Pasif"
+            ])
+        
+        # Create table
+        table = Table(table_data, colWidths=[1.5*inch, 1*inch, 1.2*inch, 1*inch, 1*inch, 0.8*inch])
+        
+        # Style the table
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+        ]))
+        
+        elements.append(table)
+        
+        # Build PDF
+        doc.build(elements)
+        pdf_buffer.seek(0)
+        
+        # Return as streaming response
+        return StreamingResponse(
+            io.BytesIO(pdf_buffer.read()),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=hizmetler.pdf"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF export failed: {str(e)}")
+
 # Include the router in the main app
 app.include_router(api_router)
 
